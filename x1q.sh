@@ -3,7 +3,7 @@
 KERNEL_DIR="$(pwd)"
 GCC_PATH="/usr/bin/"
 LLD_PATH="/usr/bin/"
-KERNEL_NAME="hazardkernel"
+KERNEL_NAME="OneUi 7"
 MAKE="./makeparallel" 
 KERNEL_MAKE_ENV="DTC_EXT=$(pwd)/tools/dtc CONFIG_BUILD_ARM64_DT_OVERLAY=y"
 
