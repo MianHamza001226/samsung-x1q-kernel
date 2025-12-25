@@ -1,11 +1,11 @@
-name: Kernel Build y2q with SuSFS
+name: Kernel Build x1q with SuSFS
 
 on:
   workflow_dispatch:
 
 env:
   ARTIFACT_DIR: kernel_artifacts
-  DEVICE: y2q
+  DEVICE: x1q
   TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
   TELEGRAM_CHATID: ${{ secrets.TELEGRAM_CHATID }}
   GH_TOKEN: ${{ secrets.GH_TOKEN }}
@@ -32,7 +32,7 @@ jobs:
           rm -rf susfs_tmp
           echo "✅ SuSFS updated."
 
-      - name: Build Kernel for y2q
+      - name: Build Kernel for x1q
         run: |
           echo "🔨 Starting kernel build for $DEVICE..."
           export ARCH=arm64
