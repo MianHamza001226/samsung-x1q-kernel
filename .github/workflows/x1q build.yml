@@ -1,103 +1,92 @@
-name: Kernel Build x1q with SuSFS
+name: not x1q build_
 
 on:
   workflow_dispatch:
+    inputs:
+      build_target:
+        description: 'Build target (all, Image, dtbs, or dtbo.img)'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+        - all
+        - Image
+        - dtbs
+        - dtbo.img
 
 env:
-  ARTIFACT_DIR: kernel_artifacts
-  DEVICE: x1q
-  TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-  TELEGRAM_CHATID: ${{ secrets.TELEGRAM_CHATID }}
-  GH_TOKEN: ${{ secrets.GH_TOKEN }}
+  ARTIFACT_DIR: kernel_artifacts_${{ github.run_number }}
 
 jobs:
-  build:
-    runs-on: ubuntu-20.04
-
+  buildkernel:
+    runs-on: ubuntu-latest
+    
     steps:
-      - name: Checkout kernel source
-        uses: actions/checkout@v3
-
+      # Checkout repository
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          
+      # Setup environment
       - name: Setup environment
         run: |
-          sudo apt update
-          sudo apt install -y git wget curl lz4 tar openssl python3 gcc make clang zip
+          sudo apt-get update && sudo apt-get install -y \
+            bc flex git ccache automake lzop bison gperf build-essential \
+            zip curl zlib1g-dev g++-multilib python3-networkx libxml2-utils \
+            bzip2 libbz2-dev squashfs-tools pngcrush schedtool dpkg-dev \
+            liblz4-tool optipng libssl-dev python-is-python3 python3-virtualenv \
+            llvm clang lld
 
-      - name: Fetch latest SuSFS (private repo)
+      # Initialize submodules
+      - name: Initialize submodules
+        run: git submodule update --init --recursive
+
+      # Create artifact directory with unique name
+      - name: Create artifact directory
         run: |
-          echo "Fetching latest SuSFS (private)..."
-          git clone https://x-access-token:${GH_TOKEN}@github.com/sykopompos/susfs.git susfs_tmp
-          rm -rf fs/sufs
-          cp -r susfs_tmp/fs/sufs fs/
-          rm -rf susfs_tmp
-          echo "✅ SuSFS updated."
+          echo "Creating artifact directory: ${{ env.ARTIFACT_DIR }}"
+          mkdir -p "${{ env.ARTIFACT_DIR }}" || {
+            echo "Failed to create directory, trying with sudo..."
+            sudo mkdir -p "${{ env.ARTIFACT_DIR }}" && sudo chown -R runner:runner "${{ env.ARTIFACT_DIR }}"
+          }
+          ls -la
 
-      - name: Build Kernel for x1q
+      # Set permissions
+      - name: Set permissions
+        run: chmod +x x1q.sh
+
+      # Build kernel with SELinux enforcing
+      - name: Build kernel
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHATID: ${{ secrets.TELEGRAM_CHATID }}
         run: |
-          echo "🔨 Starting kernel build for $DEVICE..."
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          make ${DEVICE}_defconfig
-          make -j$(nproc)
+          # Force SELinux enforcing in kernel config
+          echo "CONFIG_SECURITY_SELINUX=y" >> arch/arm64/configs/vendor/x1q_defconfig
+          echo "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=1" >> arch/arm64/configs/vendor/x1q_defconfig
+          echo "androidboot.selinux=enforcing" >> arch/arm64/boot/dts/vendor/qcom/x1q.dtsi
+          
+          sudo bash x1q.sh ${{ github.event.inputs.build_target }}
 
-          mkdir -p $ARTIFACT_DIR
-          cp arch/arm64/boot/Image* $ARTIFACT_DIR/ || true
-          cp arch/arm64/boot/dtbo.img $ARTIFACT_DIR/ || true
-          cp arch/arm64/boot/*.dtb $ARTIFACT_DIR/ || true
-
-      - name: Clone AnyKernel3
+      # Prepare artifacts
+      - name: Prepare artifacts
         run: |
-          git clone https://github.com/osm0sis/AnyKernel3.git AnyKernel3
+          if [[ -f out/arch/arm64/boot/Image.gz-dtb ]]; then
+            cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/Image.gz-dtb
+          elif [[ -f out/arch/arm64/boot/Image-dtb ]]; then
+            cp out/arch/arm64/boot/Image-dtb AnyKernel3/Image-dtb
+          elif [[ -f out/arch/arm64/boot/Image.gz ]]; then
+            cp out/arch/arm64/boot/Image.gz AnyKernel3/Image.gz
+          elif [[ -f out/arch/arm64/boot/Image ]]; then
+            cp out/arch/arm64/boot/Image AnyKernel3/Image
+          fi
+          if [[ -f out/arch/arm64/boot/dtbo.img ]]; then
+            cp out/arch/arm64/boot/dtbo.img AnyKernel3/dtbo.img
+          fi
 
-      - name: Prepare AnyKernel3 flashable zip
-        run: |
-          cd AnyKernel3
-          echo "Copying kernel files..."
-          cp ../$ARTIFACT_DIR/Image* ./
-          cp ../$ARTIFACT_DIR/dtbo.img ./
-          cp ../$ARTIFACT_DIR/*.dtb ./ || true
-
-          # Generate anykernel.sh
-          cat > anykernel.sh <<EOF
-          #!/sbin/sh
-          # AnyKernel3 Ramdisk Mod Script
-          properties() { '
-          kernel.string=SuSFS Kernel by Hamza
-          do.devicecheck=1
-          do.modules=0
-          do.systemless=1
-          device.name1=$DEVICE
-          supported.versions=11-13
-          supported.patchlevels=2020-2025
-          '; }
-          block=boot;
-          is_slot_device=0;
-          ramdisk_compression=auto;
-          patch_vbmeta_flag=auto;
-          EOF
-
-          chmod +x anykernel.sh
-
-          cd ..
-          zip -r9 kernel-${DEVICE}-susfs.zip AnyKernel3/*
-
-          mv kernel-${DEVICE}-susfs.zip $ARTIFACT_DIR/
-
-      - name: Upload Flashable Kernel Zip
+      # Upload kernel artifact
+      - name: Upload kernel to artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Flashable-Kernel
-          path: ${{ env.ARTIFACT_DIR }}/*.zip
-
-      - name: Telegram Notification (success)
-        if: success()
-        run: |
-          curl -s -X POST https://api.telegram.org/bot${{ env.TELEGRAM_TOKEN }}/sendMessage \
-          -d chat_id=${{ env.TELEGRAM_CHATID }} \
-          -d text="✅ Kernel build for y2q finished! Flashable zip is uploaded."
-
-      
-          curl -s -X POST https://api.telegram.org/bot${{ env.TELEGRAM_TOKEN }}/sendMessage \
-          -d chat_id=${{ env.TELEGRAM_CHATID }} \
-          -d text="❌ Kernel build failed. Check GitHub Actions logs."
+          name: output_kernel
+          path: AnyKernel3/*
